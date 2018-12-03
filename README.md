@@ -1,4 +1,4 @@
-# SANCrawler2: Electric Boogaloo
+# SANCrawler2: Uncle Rico's Time Machine
 
 SANCrawler is a tool designed to quickly extract information from the certificate
 transparency aggregator [crt.sh](https://crt.sh/). 
