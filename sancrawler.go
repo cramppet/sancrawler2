@@ -260,7 +260,7 @@ func getNames(url string, httpParam string, numCrawlers int) map[string]int {
  * Also use a specified number of "crawlers" which are goroutines.
  */
 func getDomainsByOrg(orgname string, numCrawlers int) map[string]int {
-	orgname = url.PathEscape(orgname)
+	orgname = url.QueryEscape(orgname)
 	url := crtshBase + crtshOrg + orgname
 	httpParam := "O=" + orgname
 	return getNames(url, httpParam, numCrawlers)
@@ -269,7 +269,7 @@ func getDomainsByOrg(orgname string, numCrawlers int) map[string]int {
 /* getDomainsByKeyword: General search, any match on any fields in x509 spec.
  */
 func getDomainsByKeyword(keyword string, numCrawlers int) map[string]int {
-	keyword = url.PathEscape(keyword)
+	keyword = url.QueryEscape(keyword)
 	url := crtshBase + crtshKeyword + keyword
 	httpParam := "q=" + keyword
 	return getNames(url, httpParam, numCrawlers)
