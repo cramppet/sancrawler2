@@ -1,5 +1,13 @@
 package main
 
+/* SANCrawler is a tool designed to enumerate linked x509 certificates based
+ * on shared metadata. Traditional approaches to using x509 data focused on
+ * linking based on shared apex domain, but in practice, many different fields
+ * exist and are actively used by corporations. SANCrawler implements two such
+ * approaches: strict organization search, and general keyword searches matching
+ * on any field.
+ */
+
 import (
 	"bufio"
 	"database/sql"
@@ -10,27 +18,24 @@ import (
 	"strings"
 	"time"
 
+	// Lets hope this one works better than psycopg2
 	_ "github.com/lib/pq"
 	log "github.com/sirupsen/logrus"
 	"golang.org/x/net/publicsuffix"
 )
 
-func getNames(orgname string) map[string]int {
-	queryStr := `SELECT ci.ISSUER_CA_ID, ci.NAME_VALUE NAME_VALUE, 
-	x509_altNames(c.CERTIFICATE, 2, TRUE) SAN_NAME, 
-	x509_nameAttributes(c.CERTIFICATE, 'commonName', TRUE) 
-	COMMON_NAME FROM ca, ct_log_entry ctle, certificate_identity ci, 
-	certificate c WHERE ci.ISSUER_CA_ID = ca.ID AND c.ID = ctle.CERTIFICATE_ID 
-	AND ci.CERTIFICATE_ID = c.ID AND ((lower(ci.NAME_VALUE) LIKE lower('%s') 
-	AND ci.NAME_TYPE = 'organizationName')) GROUP BY ci.ISSUER_CA_ID, 
-	c.ID, NAME_VALUE, COMMON_NAME, SAN_NAME;`
-
-	queryStr = fmt.Sprintf(queryStr, orgname)
+/* getNames: Retrieves the common names and subject alternative names (SANs)
+ * from the postgres instance run by crt.sh, you can find details about their
+ * complicated database schema here: https://github.com/crtsh/certwatch_db
+ */
+func getNames(queryStr string, param string) map[string]int {
+	queryStr = fmt.Sprintf(queryStr, param)
 	queryStr = strings.Replace(queryStr, "\n", " ", -1)
 
+	// https://groups.google.com/forum/#!msg/crtsh/sUmV0mBz8bQ/K-6Vymd_AAAJ
 	connStr := "host=crt.sh user=guest dbname=certwatch"
 	db, err := sql.Open("postgres", connStr)
-	ret := make(map[string]int)
+	names := make(map[string]int)
 
 	if err != nil {
 		log.Fatal(err)
@@ -42,35 +47,71 @@ func getNames(orgname string) map[string]int {
 		log.Fatal(err)
 	}
 
+	// Scan through the records returned and keep track of the information we
+	// actually care about.
 	for rows.Next() {
 		var (
-			caID   int64
-			org    string
 			common string
 			san    string
 		)
 
-		if err := rows.Scan(&caID, &org, &common, &san); err != nil {
+		// Note: Some of these results may not be actual domains, recall these are
+		// just common names and SANs. They only have to be resolvable/accessible for
+		// whatever system is using them. This means you may find internal domain names
+		// as SANs that aren't fully qualified. You are very likely to encounter wildcard
+		// entires too.
+
+		if err := rows.Scan(&common, &san); err != nil {
 			log.Fatal(err)
 		}
 
-		ret[common] = 0
-		ret[san] = 0
+		// Make sure to lowercase to avoid duplicates based on mixed cases
+
+		common = strings.ToLower(common)
+		san = strings.ToLower(san)
+
+		// Check if they are already in our map, this lookup is O(1).
+
+		if _, ok := names[common]; ok {
+			continue
+		}
+
+		if _, ok := names[san]; ok {
+			continue
+		}
+
+		names[common] = 0
+		names[san] = 0
 	}
 
-	return ret
+	return names
 }
 
-/* getDomainsByOrg: Get all the names belonging to a certain organization name.
+/* getDomainsByOrg: Get all the names belonging to a certain organization.
  */
 func getDomainsByOrg(orgname string) map[string]int {
-	return getNames(orgname)
+	// I have never liked SQL and this query is probably shit, but it returns
+	// results faster than any of the others I tried and I have no idea why.
+	queryStr := `SELECT x509_altNames(c.CERTIFICATE, 2, TRUE) SAN_NAME, 
+	x509_nameAttributes(c.CERTIFICATE, 'commonName', TRUE) COMMON_NAME 
+	FROM ca, ct_log_entry ctle, certificate_identity ci, certificate c 
+	WHERE ci.ISSUER_CA_ID = ca.ID AND c.ID = ctle.CERTIFICATE_ID 
+	AND ci.CERTIFICATE_ID = c.ID AND ((lower(ci.NAME_VALUE) LIKE lower('%s') 
+	AND ci.NAME_TYPE = 'organizationName')) GROUP BY ci.ISSUER_CA_ID, 
+	c.ID, NAME_VALUE, COMMON_NAME, SAN_NAME;`
+	return getNames(queryStr, orgname)
 }
 
 /* getDomainsByKeyword: General search, any match on any fields in x509 spec.
  */
 func getDomainsByKeyword(keyword string) map[string]int {
-	return getNames(keyword)
+	queryStr := `SELECT x509_altNames(c.CERTIFICATE, 2, TRUE) SAN_NAME, 
+	x509_nameAttributes(c.CERTIFICATE, 'commonName', TRUE) COMMON_NAME 
+	FROM ca, ct_log_entry ctle, certificate_identity ci, certificate c 
+	WHERE ci.ISSUER_CA_ID = ca.ID AND c.ID = ctle.CERTIFICATE_ID 
+	AND ci.CERTIFICATE_ID = c.ID AND lower(ci.NAME_VALUE) LIKE lower('%s')
+	GROUP BY ci.ISSUER_CA_ID, c.ID, NAME_VALUE, COMMON_NAME, SAN_NAME;`
+	return getNames(queryStr, keyword)
 }
 
 /* tryExtractOrg: Attempts to automatically extract the organization field from
@@ -106,7 +147,7 @@ func tryExtractOrg(url string) string {
 
 /* printStatistics: prints statistics about which top level domains occur the most
  * frequently. Can be useful in helping to remove false positives, or gain insight
- * into subdomain distribution.
+ * into subdomain distribution. Probably will add more useful stats later.
  */
 func printStatistics(subdomains *map[string]int) {
 	domains := make(map[string]int)
@@ -145,28 +186,45 @@ func printASCIIArt(major int, minor int) {
 }
 
 func main() {
-	var keyword = flag.String("k", "", "Keyword to match on. Be careful with wildcard.")
-	var org = flag.String("s", "", "Organization name to match on. Be careful with wildcard.")
-	var print = flag.Bool("p", false, "Print subdomain statistics to stdout")
-	var outfile = flag.String("o", "", "Output file")
-	var autoUrl = flag.String("u", "", "Attempt auto-extraction of organization from URL")
-	flag.Parse()
+	var print = flag.Bool("p", false, "")
+	var keyword = flag.String("k", "", "")
+	var org = flag.String("s", "", "")
+	var outfile = flag.String("o", "", "")
+	var autoURL = flag.String("u", "", "")
+	var subdomains map[string]int
 
-	printASCIIArt(2, 1)
-	subdomains := make(map[string]int)
+	// https://stackoverflow.com/questions/23725924/can-gos-flag-package-print-usage
+	flag.Usage = func() {
+		out := flag.CommandLine.Output()
+		fmt.Fprintf(out, "SANCrawler: reverses x509 metadata using CT logs\n")
+		fmt.Fprintf(out, "Examples: ./sancrawler -u https://example.com/ -o example.out\n")
+		fmt.Fprintf(out, "          ./sancrawler -s \"Company name\" -o example.out -p\n\n")
+		fmt.Fprintf(out, "Discovery modes:\n")
+		fmt.Fprintf(out, "  -k  Keyword to match on. Be careful with wildcard.\n")
+		fmt.Fprintf(out, "  -s  Organization name to match on. Be careful with wildcard.\n")
+		fmt.Fprintf(out, "  -u  URL; attempt auto-extraction of x509 Subject's Organization field.\n")
+		fmt.Fprintf(out, "Output:\n")
+		fmt.Fprintf(out, "  -o  Use this output file.\n")
+		fmt.Fprintf(out, "Auxiliary:\n")
+		fmt.Fprintf(out, "  -p  Print domain statistics (ie. subdomain distribution) to stdout.\n")
+	}
+
 	start := time.Now()
+
+	flag.Parse()
+	printASCIIArt(2, 1)
 
 	log.Info("SANCrawler running")
 
 	// If we want to try the auto extraction, then we are implictly choosing to
 	// use the organization mode.
 
-	if *autoUrl != "" {
+	if *autoURL != "" {
 		log.WithFields(log.Fields{
-			"URL": *autoUrl,
+			"URL": *autoURL,
 		}).Info("Attempting auto-extraction from URL")
 
-		*org = tryExtractOrg(*autoUrl)
+		*org = tryExtractOrg(*autoURL)
 
 		if *org != "" {
 			log.WithFields(log.Fields{
@@ -177,7 +235,7 @@ func main() {
 
 	// Switch between the different possible modes, first one we see is the one
 	// we end up doing. Passing multiple modes doesn't make a lot of sense, unless
-	// we want to combine results later on.
+	// we want to combine results or something.
 
 	if *keyword != "" {
 		subdomains = getDomainsByKeyword(*keyword)
