@@ -15,77 +15,76 @@ of as "reverse X509" for the same purpose.
 ## How to build
 
 - First, [install golang](https://golang.org/doc/install) 
-- Then, just do `go build sancrawler.go` from the sancrawler2 directory
+- Then, just do a `make` from the sancrawler2 directory
 
 ## How to use
 
 **Keep in mind that the heuristic which SANCrawler uses in practice can sometimes**
 **lead to incorrect or inaccurate results. Results not guaranteed.**
 
-You need to acquire some kind of metadata from the certificates of your target.
-Sometimes this is very simple, other times nothing exists at all. The best way
-I have found is simply navigating to the homepage of the target and checking if
-there is an "Organization" or "Organizational Unit" field present in the (presumed)
-X509 certificate, and if so, to use that. Otherwise you'll have to get creative 
-to find something useable. 
+SANCrawler now implements a mode to try and find sufficient metadata for you. You can 
+specify the **url mode** with the `-u https://url.com` option and SANCrawler will do 
+its best to detect the metadata if it exists. If that doesn't work you'll have to get 
+creative to find something useable. 
 
-SANCrawler implements two different modes, a **keyword search mode** and a strict 
-**organization search mode**. Use whichever you prefer, the keyword search is a more
-general search which encompasses all that the organization search mode does, so
-if the query works in the organization mode, it will work just as well or perhaps
-better in the keyword mode. 
+SANCrawler implements one other mode to facilitate that, a **keyword search mode** 
+that allows you to search by an arbitrary string it encompasses all that the same search 
+fields that the URL search mode does. 
 
-The purpose of the organization mode given what I just said is to try to refine
-the results more to remove some false positives. 
+## Command Line Options
 
-### Wildcard
+Discovery modes:
+  -k  Keyword to match on.
+  -u  URL; attempt auto-extraction of x509 Subject's Organization field.
 
-You can use the `%` character as a wildcard in either of the search modes. This is
-incidential due to the crt.sh service providing this feature. Be careful when using
-this as searches of the form `%QUERY%` tend not to work. 
+Output:
+  -o  Use this output file.
+
+Auxiliary:
+  -p  Print domain statistics (ie. subdomain distribution) to stdout.
 
 ## Examples
 
-1. Using the organization search mode on Apple. **Enumerating 16,000 subdomains in under a minute.** 
+1. Using the URL mode on Apple. **Enumerating 16,576 subdomains in 48 seconds**
 
 ```
-./sancrawler -s "Apple Inc." -o apple.out
+./sancrawler -u https://apple.com -o apple.out
 
   __________
-  \\        | SAN CRAWLER v2: Electric Boogaloo
+  \\        | SAN CRAWLER v2.1: Uncle Rico's Time Machine
    \\       |    @cramppet
-    \\@@@@@@|
-
-Processing 12104 IDs with 75 goroutines . . . got 16221 unique subdomains
-
-
-SAN Crawler took 54.443376278s
+    \\@@@@@@|   
+	
+INFO[0000] SANCrawler running                           
+INFO[0000] Attempting auto-extraction from URL           URL="https://apple.com"
+INFO[0000] Using extracted organization as seed          Organization="Apple Inc."
+INFO[0048] Writing results to output file                Outfile=apple.out
+INFO[0048] SANCrawler shutting down                      Runtime=48.736586958s
 ```
 
-2. Using the keyword search mode with a seed value taken from nsa.gov's X509 cert.
+2. Using the keyword search mode with a seed value taken from whitehouse.gov's cert.
 
 ```
-./sancrawler -k "National Security Agency%" -p
+⇒  ./sancrawler -k "Executive Office of the President - Office of Administration" -p
 
   __________
-  \\        | SAN CRAWLER v2: Electric Boogaloo
+  \\        | SAN CRAWLER v2.1: Uncle Rico's Time Machine
    \\       |    @cramppet
-    \\@@@@@@|
-
-Processing 27 IDs with 75 goroutines . . . got 12 unique subdomains
-
-www2.nsa.gov
-www.nsa.gov
-nsa.gov
-m.intelligencecareers.gov
-www.intelligencecareers.gov
-apps.nsa.gov
-apps-test.nsa.gov
-m.nsa.gov
-vpn.nsa.gov
-stage.nsa.gov
-captcha.nsa.gov
-intelligencecareers.gov
-
-SAN Crawler took 295.046208ms
+    \\@@@@@@|   
+	
+INFO[0000] SANCrawler running                           
+INFO[0001] Printing domains statistics ...              
+INFO[0001]  . . .                                        Domain=ai.gov Occurances=2
+INFO[0001]  . . .                                        Domain=bebest.gov Occurances=2
+INFO[0001]  . . .                                        Domain=ostp.gov Occurances=4
+INFO[0001]  . . .                                        Domain=crisisnextdoor.gov Occurances=2
+INFO[0001]  . . .                                        Domain=ondcp.gov Occurances=2
+INFO[0001]  . . .                                        Domain=whitehousedrugpolicy.gov Occurances=2
+INFO[0001]  . . .                                        Domain=budget.gov Occurances=2
+INFO[0001]  . . .                                        Domain=whitehouse.gov Occurances=7
+INFO[0001]  . . .                                        Domain=eop.gov Occurances=2
+INFO[0001]  . . .                                        Domain=wh.gov Occurances=5
+INFO[0001]  . . .                                        Domain=omb.gov Occurances=2
+INFO[0001]  . . .                                        Domain=greatagain.gov Occurances=2
+INFO[0001] SANCrawler shutting down                      Runtime=1.755120376s
 ```
