@@ -33,6 +33,7 @@ fields that the URL search mode does.
 
 ## Command Line Options
 
+```
 Discovery modes:
   -k  Keyword to match on.
   -u  URL; attempt auto-extraction of x509 Subject's Organization field.
@@ -42,6 +43,7 @@ Output:
 
 Auxiliary:
   -p  Print domain statistics (ie. subdomain distribution) to stdout.
+```
 
 ## Examples
 
