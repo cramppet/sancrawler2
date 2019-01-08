@@ -282,10 +282,6 @@ func tryExtractOrg(url string) string {
 
 	res, err := client.Do(req)
 	if err != nil {
-		log.Fatal(err)
-	}
-
-	if err != nil {
 		log.Fatal("Could not connect to URL provided. Quitting.")
 	}
 
