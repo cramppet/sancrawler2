@@ -16,6 +16,8 @@ import (
 	"net/http"
 	"os"
 	"regexp"
+	"runtime"
+	"runtime/pprof"
 	"strings"
 	"time"
 
@@ -39,6 +41,7 @@ type crawlerData struct {
  * complicated database schema here: https://github.com/crtsh/certwatch_db
  */
 func getNames(query string, org string, inChan chan crawlerData, outChan chan string, stopChan chan bool) {
+	// https://blog.marin.qa/posts/2016/04/07/pgbouncer-problems-with-go/
 	connStr := "host=crt.sh user=guest dbname=certwatch binary_parameters=yes"
 	db, err := sql.Open("postgres", connStr)
 	if err != nil {
@@ -179,13 +182,15 @@ func getDomainsByKeyword(orgname string) map[string]int {
 	// results faster than any of the others I tried by *a lot* and I have no
 	// idea why.
 
+	// This is where this tool gets its name. The gorountines that read from the
+	// sanChan are called "SANCrawlers".
+
 	sanQuery := `
 	SELECT c.ID, x509_altNames(c.CERTIFICATE, 2, TRUE)
 	FROM certificate c WHERE c.ID IN (
 		SELECT DISTINCT ci.CERTIFICATE_ID
 		 FROM certificate_identity ci
-		 WHERE ci.ISSUER_CA_ID = $1 AND
-					 lower(ci.NAME_VALUE) = lower($2)
+		 WHERE ci.ISSUER_CA_ID = $1 AND lower(ci.NAME_VALUE) = lower($2)
 	 )
 	ORDER BY c.ID DESC OFFSET $3 LIMIT 2000;
 	`
@@ -195,8 +200,7 @@ func getDomainsByKeyword(orgname string) map[string]int {
 	FROM certificate c WHERE c.ID IN (
 		SELECT DISTINCT ci.CERTIFICATE_ID
 		 FROM certificate_identity ci
-		 WHERE ci.ISSUER_CA_ID = $1 AND
-					 lower(ci.NAME_VALUE) = lower($2)
+		 WHERE ci.ISSUER_CA_ID = $1 AND lower(ci.NAME_VALUE) = lower($2)
 	 )
 	ORDER BY c.ID DESC OFFSET $3 LIMIT 2000;
 	`
@@ -260,8 +264,26 @@ func getDomainsByKeyword(orgname string) map[string]int {
  * any x509 certificates detected from trying a TLS connection to the URL specified.
  */
 func tryExtractOrg(url string) string {
-	res, err := http.Get(url)
 	org := ""
+	client := &http.Client{
+		CheckRedirect: func(req *http.Request, via []*http.Request) error {
+			return http.ErrUseLastResponse
+		},
+	}
+
+	req, err := http.NewRequest("GET", url, nil)
+	if err != nil {
+		log.Fatal(err)
+	}
+
+	// Akamai and other WAFs will block our requests if we aren't using a standard
+	// User-Agent string.
+	req.Header.Set("User-Agent", "Mozilla/5.0 (Windows NT 6.1; WOW64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/47.0.2526.111 Safari/537.36")
+
+	res, err := client.Do(req)
+	if err != nil {
+		log.Fatal(err)
+	}
 
 	if err != nil {
 		log.Fatal("Could not connect to URL provided. Quitting.")
@@ -329,6 +351,7 @@ func printASCIIArt(major int, minor int) {
 
 func main() {
 	var print = flag.Bool("p", false, "")
+	var debugMode = flag.Bool("d", false, "")
 	var keyword = flag.String("k", "", "")
 	var org = flag.String("s", "", "")
 	var outfile = flag.String("o", "", "")
@@ -346,6 +369,8 @@ func main() {
 		fmt.Fprintf(out, "  -o  Use this output file.\n")
 		fmt.Fprintf(out, "Auxiliary:\n")
 		fmt.Fprintf(out, "  -p  Print domain statistics (ie. subdomain distribution) to stdout.\n")
+		fmt.Fprintf(out, "Debugging:\n")
+		fmt.Fprintf(out, "  -d  Generate profiling files and debugging output\n")
 	}
 
 	start := time.Now()
@@ -354,6 +379,19 @@ func main() {
 	printASCIIArt(2, 1)
 
 	log.Info("SANCrawler running")
+
+	// Check if we are running in debug mode, enable CPU profiling now if we are
+
+	if *debugMode {
+		cpuProfFile, err := os.Create("sancrawler2.cpu")
+		if err != nil {
+			log.Fatal("could not create CPU profile: ", err)
+		}
+		if err := pprof.StartCPUProfile(cpuProfFile); err != nil {
+			log.Fatal("could not start CPU profile: ", err)
+		}
+		defer pprof.StopCPUProfile()
+	}
 
 	// If we want to try the auto extraction, then we are implictly choosing to
 	// use the organization mode.
@@ -416,6 +454,20 @@ func main() {
 		}
 
 		bufWriter.Flush()
+	}
+
+	// Before we finish, check if we need to output memory usage stats for debug mode
+
+	if *debugMode {
+		memProfFile, err := os.Create("sancrawler2.mem")
+		if err != nil {
+			log.Fatal("Could not create memory profile: ", err)
+		}
+		runtime.GC()
+		if err := pprof.WriteHeapProfile(memProfFile); err != nil {
+			log.Fatal("Could not write memory profile: ", err)
+		}
+		memProfFile.Close()
 	}
 
 	log.WithFields(log.Fields{
