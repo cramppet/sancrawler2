@@ -125,7 +125,7 @@ func loadCrawlerData(orgname string, sanChan chan crawlerData, cnChan chan crawl
 
 	// Make database connection
 
-	connStr := "host=crt.sh user=guest dbname=certwatch"
+	connStr := "host=crt.sh user=guest dbname=certwatch binary_parameters=yes"
 	db, err := sql.Open("postgres", connStr)
 	if err != nil {
 		log.Fatal(err)

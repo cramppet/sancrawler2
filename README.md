@@ -15,7 +15,7 @@ of as "reverse X509" for the same purpose.
 ## How to build
 
 - First, [install golang](https://golang.org/doc/install) 
-- Then, just do a `make` from the sancrawler2 directory
+- Then, just do a `go build` from the sancrawler2 directory
 
 ## How to use
 
